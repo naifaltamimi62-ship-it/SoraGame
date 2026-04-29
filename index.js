@@ -3,17 +3,27 @@ const {
     StringSelectMenuBuilder, SlashCommandBuilder, REST, Routes, 
     PermissionFlagsBits, ChannelType, Partials 
 } = require('discord.js');
-const http = require('http'); // مكتبة لإبقاء البوت حياً
+const http = require('http');
 
-// --- 1. إعدادات السيرفر الوهمي (Keep Alive) ---
-// هذا الجزء يخلي الاستضافة تظن أن البوت "موقع ويب" ولا تطفيه
+// --- 1. نظام إبقاء البوت حياً (Keep Alive) للاستضافات المجانية ---
 http.createServer((req, res) => {
     res.write("Spy Bot is Running 24/7!");
     res.end();
 }).listen(8080);
 
-// --- 2. جلب البيانات من ملف الإعدادات ---
-const { token, channelId } = require('./config.json');
+// --- 2. نظام جلب البيانات الذكي (حل مشكلة config.json) ---
+let token, channelId;
+
+try {
+    // يحاول القراءة من الملف أولاً (إذا كنت تشغله من جهازك)
+    const config = require('./config.json');
+    token = config.token;
+    channelId = config.channelId;
+} catch (error) {
+    // إذا لم يجد الملف (مثل ما يحدث في Render)، يقرأ من متغيرات البيئة
+    token = process.env.token;
+    channelId = process.env.channelId;
+}
 
 const client = new Client({ 
     intents: [
@@ -27,7 +37,7 @@ const client = new Client({
 
 let players = new Map();
 
-// --- 3. رسالة اللعبة الرسمية والقوانين ---
+// --- 3. قالب رسالة اللعبة الرسمية والقوانين ---
 const getOfficialEmbed = () => {
     return new EmbedBuilder()
         .setTitle('🎭 تجربة اجتماعية غامضة: من المتخفي؟')
@@ -60,35 +70,36 @@ const getOfficialEmbed = () => {
 
 // --- 4. تعريف أوامر السلاش ---
 const commands = [
-    new SlashCommandBuilder().setName('login').setDescription('التسجيل (استخدمه في الخاص)')
+    new SlashCommandBuilder().setName('login').setDescription('التسجيل (في الخاص فقط)')
         .addStringOption(opt => opt.setName('name').setDescription('اسم الشخصية الوهمية').setRequired(true))
         .addStringOption(opt => opt.setName('desc').setDescription('وصف الشخصية').setRequired(true)),
     
     new SlashCommandBuilder().setName('say').setDescription('ارسل رسالة مجهولة باسم شخصيتك')
         .addStringOption(opt => opt.setName('message').setDescription('محتوى الرسالة').setRequired(true)),
 
-    new SlashCommandBuilder().setName('who').setDescription('عرض أوصاف الشخصيات الحالية والبحث عن المتناقضات'),
+    new SlashCommandBuilder().setName('who').setDescription('عرض أوصاف الشخصيات الحالية'),
 
-    new SlashCommandBuilder().setName('admin_tools').setDescription('أدوات الإدارة للأدمن فقط')
+    new SlashCommandBuilder().setName('admin_tools').setDescription('أدوات الإدارة للأدمن')
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-        .addStringOption(opt => opt.setName('action').setDescription('اختر الإجراء المطلوب').setRequired(true)
+        .addStringOption(opt => opt.setName('action').setDescription('اختر الإجراء').setRequired(true)
             .addChoices(
-                { name: 'إرسال إعلان اللعبة للكل', value: 'announcement' },
-                { name: 'رؤية الأسماء الحقيقية (كشف)', value: 'list_players' },
+                { name: 'إرسال إعلان اللعبة (للكل)', value: 'announcement' },
+                { name: 'رؤية الأسماء الحقيقية', value: 'list_players' },
                 { name: 'حذف شخصية محددة', value: 'delete_player' },
                 { name: 'بدء التصويت على الطرد', value: 'start_vote' }
             ))
 ].map(c => c.toJSON());
 
-const rest = new REST({ version: '10' }).setToken(token);
-
-// --- 5. تشغيل البوت وتثبيت الأوامر ---
+// --- 5. تشغيل البوت ورفع الأوامر ---
 client.once('ready', async () => {
+    if (!token) return console.error("❌ لم يتم العثور على التوكن!");
+    
+    const rest = new REST({ version: '10' }).setToken(token);
     try {
         await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
-        console.log(`✅ تم التشغيل بنجاح باسم: ${client.user.tag}`);
+        console.log(`✅ البوت شغال وجاهز: ${client.user.tag}`);
 
-        // إرسال تلقائي للقوانين كل 15 دقيقة
+        // إرسال القوانين كل 15 دقيقة تلقائياً
         setInterval(async () => {
             const channel = await client.channels.fetch(channelId).catch(() => null);
             if (channel) channel.send({ embeds: [getOfficialEmbed()] }).catch(() => null);
@@ -97,7 +108,7 @@ client.once('ready', async () => {
     } catch (e) { console.error(e); }
 });
 
-// --- 6. معالجة التفاعلات والأوامر ---
+// --- 6. معالجة التفاعلات ---
 client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand() && !interaction.isStringSelectMenu()) return;
 
@@ -107,7 +118,7 @@ client.on('interactionCreate', async interaction => {
         if (commandName === 'login') {
             if (interaction.guildId) return interaction.reply({ content: '❌ للأمان، سجل في الخاص حق البوت!', ephemeral: true });
             players.set(interaction.user.id, { name: options.getString('name'), desc: options.getString('desc') });
-            await interaction.reply('✅ تم تسجيل شخصيتك بنجاح! اذهب للسيرفر وابدأ اللعب.');
+            await interaction.reply('✅ تم تسجيل شخصيتك بنجاح! اذهب للقناة وابدأ اللعب بـ /say');
         }
 
         if (commandName === 'say') {
@@ -115,57 +126,51 @@ client.on('interactionCreate', async interaction => {
             if (!p) return interaction.reply({ content: '❌ سجل أولاً بـ /login في الخاص', ephemeral: true });
             const channel = await client.channels.fetch(channelId).catch(() => null);
             if (!channel) return interaction.reply({ content: '❌ قناة اللعبة غير موجودة!', ephemeral: true });
-            
+
             await channel.send({ embeds: [new EmbedBuilder().setAuthor({ name: p.name }).setDescription(options.getString('message')).setColor('#2b2d31')] });
             await interaction.reply({ content: '✅ تم الإرسال بنجاح!', ephemeral: true });
         }
 
         if (commandName === 'who') {
             let list = Array.from(players.values()).map(v => `🎭 **${v.name}:** ${v.desc}`).join('\n\n');
-            await interaction.reply({ embeds: [new EmbedBuilder().setTitle('قائمة أوصاف الشخصيات').setDescription(list || 'لا يوجد لاعبين حالياً')], ephemeral: true });
+            await interaction.reply({ embeds: [new EmbedBuilder().setTitle('قائمة أوصاف الشخصيات الحالية').setDescription(list || 'لا يوجد لاعبين حالياً')], ephemeral: true });
         }
 
         if (commandName === 'admin_tools') {
             const act = options.getString('action');
-            
             if (act === 'announcement') {
                 const channel = await client.channels.fetch(channelId);
                 await channel.send({ content: '@everyone', embeds: [getOfficialEmbed()] });
-                await interaction.reply({ content: 'تم إرسال الإعلان للكل', ephemeral: true });
+                await interaction.reply({ content: 'تم إرسال الإعلان للكل بنجاح', ephemeral: true });
             }
-            
             if (act === 'list_players') {
                 let list = Array.from(players.entries()).map(([id, v]) => `👤 **${v.name}** -> <@${id}>`).join('\n');
-                await interaction.reply({ content: list || "لا يوجد أحد مسجل", ephemeral: true });
+                await interaction.reply({ content: list || "لا يوجد أحد مسجل حالياً", ephemeral: true });
             }
-            
             if (act === 'delete_player') {
-                if (players.size === 0) return interaction.reply({ content: 'لا يوجد لاعبين', ephemeral: true });
+                if (players.size === 0) return interaction.reply({ content: 'لا يوجد لاعبين لحذفهم', ephemeral: true });
                 const menu = new StringSelectMenuBuilder().setCustomId('del_menu').setPlaceholder('اختر الشخصية لحذفها')
                     .addOptions(Array.from(players.values()).map(p => ({ label: p.name, value: p.name })));
-                await interaction.reply({ content: '🗑️ اختر الشخصية لحذف داتا التسجيل الخاصة بها:', components: [new ActionRowBuilder().addComponents(menu)], ephemeral: true });
+                await interaction.reply({ content: '🗑️ اختر الشخصية المراد حذف بياناتها:', components: [new ActionRowBuilder().addComponents(menu)], ephemeral: true });
             }
-
             if (act === 'start_vote') {
                 if (players.size === 0) return interaction.reply({ content: 'لا يوجد لاعبين للتصويت عليهم', ephemeral: true });
                 const menu = new StringSelectMenuBuilder().setCustomId('vote_kick').setPlaceholder('صوت ضد شخص للطرد')
                     .addOptions(Array.from(players.values()).map(p => ({ label: p.name, value: p.name })));
-                await interaction.channel.send({ content: '🚨 **وقت الحساب!** صوتوا الآن ضد الشخص الذي تُريدون طرده:', components: [new ActionRowBuilder().addComponents(menu)] });
+                await interaction.channel.send({ content: '🚨 **وقت الحساب!** صوتوا الآن ضد الشخص الذي تُريدون طرده من اللعبة:', components: [new ActionRowBuilder().addComponents(menu)] });
                 await interaction.reply({ content: 'تم تفعيل منيو التصويت بنجاح', ephemeral: true });
             }
         }
     }
 
-    // معالجة القوائم المنسدلة
     if (interaction.isStringSelectMenu()) {
         if (interaction.customId === 'del_menu') {
             const name = interaction.values[0];
             for (let [id, data] of players.entries()) {
                 if (data.name === name) { players.delete(id); break; }
             }
-            await interaction.update({ content: `✅ تم حذف شخصية **${name}**، يمكنه الآن التسجيل من جديد.`, components: [] });
+            await interaction.update({ content: `✅ تم حذف شخصية **${name}** بنجاح.`, components: [] });
         }
-        
         if (interaction.customId === 'vote_kick') {
             await interaction.reply({ content: `✅ تم تسجيل صوتك ضد: **${interaction.values[0]}**`, ephemeral: true });
         }
