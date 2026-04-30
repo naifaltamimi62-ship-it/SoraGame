@@ -6,11 +6,11 @@ const {
 const http = require('http');
 const mongoose = require('mongoose');
 
-// --- 1. إبقاء البوت حياً ---
+// --- 1. نظام إبقاء البوت حياً ---
 const port = process.env.PORT || 10000; 
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.write("Sora Bot - Multi-Server Logic Active");
+    res.write("Sora Bot - Ultimate Edition Active");
     res.end();
 }).listen(port, '0.0.0.0');
 
@@ -27,52 +27,55 @@ try {
 
 mongoose.connect(mongoUri).then(() => console.log("📦 Connected to MongoDB!"));
 
-// الموديل المحدث: الشخصية مرتبطة بالمستخدم + السيرفر
+// الموديلات
 const Player = mongoose.model('Player', new mongoose.Schema({
-    userId: String,
-    guildId: String, 
-    name: String,
-    desc: String
+    userId: String, guildId: String, name: String, desc: String
+}));
+
+const Vote = mongoose.model('Vote', new mongoose.Schema({
+    guildId: String, voterId: String,
+    q1: String, q2: String, q3: String
 }));
 
 const GuildConfig = mongoose.model('GuildConfig', new mongoose.Schema({
-    guildId: String,
-    channelId: String
+    guildId: String, channelId: String
 }));
 
 const client = new Client({ 
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.DirectMessages],
     partials: [Partials.Channel, Partials.Message]
 });
 
-// --- 3. الأوامر المحدثة (بدون الحاجة لـ ID السيرفر يدوياً) ---
+// --- 3. الأوامر المدمجة ---
 const commands = [
-    new SlashCommandBuilder().setName('login').setDescription('تسجيل شخصية لهذا السيرفر (استخدمه في روم اللعبة)')
+    new SlashCommandBuilder().setName('login').setDescription('تسجيل شخصية لهذا السيرفر')
         .addStringOption(opt => opt.setName('name').setDescription('اسم الشخصية').setRequired(true))
         .addStringOption(opt => opt.setName('desc').setDescription('وصف الشخصية').setRequired(true)),
     
     new SlashCommandBuilder().setName('say').setDescription('ارسل رسالة مجهولة')
         .addStringOption(opt => opt.setName('message').setDescription('محتوى الرسالة').setRequired(true)),
 
-    new SlashCommandBuilder().setName('who').setDescription('عرض شخصيات هذا السيرفر فقط'),
+    new SlashCommandBuilder().setName('who').setDescription('عرض شخصيات هذا السيرفر'),
 
     new SlashCommandBuilder().setName('admin_tools').setDescription('أدوات الإدارة')
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
         .addStringOption(opt => opt.setName('action').setDescription('الأمر').setRequired(true)
             .addChoices(
                 { name: '📢 إرسال إعلان', value: 'announcement' },
+                { name: '🗳️ بدء التصويت الثلاثي', value: 'start_triple_vote' },
+                { name: '📊 عرض نتائج التصويت', value: 'show_results' },
+                { name: '📍 ضبط القناة', value: 'set_channel' },
                 { name: '🔍 كشف الهويات', value: 'list_players' },
-                { name: '🗳️ بدء تصويت', value: 'start_vote' },
-                { name: '📍 ضبط القناة', value: 'set_channel' }
+                { name: '❌ حذف جميع البيانات', value: 'reset_all' }
             ))
-        .addStringOption(opt => opt.setName('text').setDescription('نص الإعلان (اختياري)').setRequired(false)),
+        .addStringOption(opt => opt.setName('text').setDescription('نص الإعلان (يستخدم مع خيار الإعلان فقط)').setRequired(false)),
 ].map(c => c.toJSON());
 
 client.once('ready', async () => {
     const rest = new REST({ version: '10' }).setToken(token);
     try {
         await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
-        console.log(`✅ البوت جاهز للفصل بين السيرفرات: ${client.user.tag}`);
+        console.log(`✅ البوت المتكامل جاهز: ${client.user.tag}`);
     } catch (e) { console.error(e); }
 });
 
@@ -81,74 +84,88 @@ client.on('interactionCreate', async interaction => {
     const { commandName, options, guildId, user } = interaction;
 
     if (commandName === 'login') {
-        if (!guildId) return interaction.reply('❌ سجل داخل السيرفر ليتم ربط شخصيتك به!');
-        
-        // سيتم حفظ الشخصية لهذا السيرفر فقط
-        await Player.findOneAndUpdate(
-            { userId: user.id, guildId: guildId },
-            { name: options.getString('name'), desc: options.getString('desc') },
-            { upsert: true }
-        );
-        
-        return interaction.reply({ content: `✅ تم تسجيل شخصيتك في هذا السيرفر بنجاح! هويتك مخفية عن الآخرين.`, flags: [MessageFlags.Ephemeral] });
+        if (!guildId) return interaction.reply('❌ سجل داخل السيرفر!');
+        await Player.findOneAndUpdate({ userId: user.id, guildId }, { name: options.getString('name'), desc: options.getString('desc') }, { upsert: true });
+        return interaction.reply({ content: `✅ سجلت هويتك المجهولة بنجاح!`, flags: [MessageFlags.Ephemeral] });
     }
 
     if (commandName === 'say') {
         if (!guildId) return interaction.reply('❌ استخدمه داخل السيرفر!');
-        const p = await Player.findOne({ userId: user.id, guildId: guildId });
-        if (!p) return interaction.reply({ content: '❌ ليس لديك شخصية في هذا السيرفر! سجل أولاً بـ /login', flags: [MessageFlags.Ephemeral] });
-        
+        const p = await Player.findOne({ userId: user.id, guildId });
+        if (!p) return interaction.reply({ content: '❌ سجل بـ /login أولاً!', flags: [MessageFlags.Ephemeral] });
         const config = await GuildConfig.findOne({ guildId });
-        if (!config) return interaction.reply({ content: '❌ لم يتم ضبط قناة اللعبة بعد!', flags: [MessageFlags.Ephemeral] });
-
+        if (!config) return interaction.reply({ content: '❌ لم يتم ضبط القناة!', flags: [MessageFlags.Ephemeral] });
         const channel = await client.channels.fetch(config.channelId);
         await channel.send({ embeds: [new EmbedBuilder().setAuthor({ name: p.name }).setDescription(options.getString('message')).setColor('#2b2d31')] });
-        return interaction.reply({ content: '✅ أرسلت بنجاح.', flags: [MessageFlags.Ephemeral] });
+        return interaction.reply({ content: '✅ تم الإرسال!', flags: [MessageFlags.Ephemeral] });
     }
 
     if (commandName === 'who') {
         if (!guildId) return interaction.reply('❌ استخدمه داخل السيرفر!');
-        const players = await Player.find({ guildId: guildId });
+        const players = await Player.find({ guildId });
         let list = players.map(v => `🎭 **${v.name}:** ${v.desc}`).join('\n\n');
-        return interaction.reply({ embeds: [new EmbedBuilder().setTitle('قائمة الشخصيات هنا').setDescription(list || 'لا يوجد لاعبين حالياً')], flags: [MessageFlags.Ephemeral] });
+        return interaction.reply({ embeds: [new EmbedBuilder().setTitle('الشخصيات الحالية').setDescription(list || 'لا يوجد لاعبين')], flags: [MessageFlags.Ephemeral] });
     }
 
     if (commandName === 'admin_tools') {
-        await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
         const act = options.getString('action');
-
+        
         if (act === 'set_channel') {
             await GuildConfig.findOneAndUpdate({ guildId }, { channelId: interaction.channelId }, { upsert: true });
-            return interaction.editReply('✅ تم ضبط هذه القناة كمقر للعبة.');
+            return interaction.reply({ content: '✅ تم ضبط القناة للعبة.', flags: [MessageFlags.Ephemeral] });
         }
 
         const config = await GuildConfig.findOne({ guildId });
         if (act === 'announcement') {
             const text = options.getString('text');
-            if (!text) return interaction.editReply('❌ يرجى كتابة النص في خانة text');
+            if (!text) return interaction.reply({ content: '❌ اكتب النص في خانة text!', flags: [MessageFlags.Ephemeral] });
             const channel = await client.channels.fetch(config.channelId);
-            await channel.send({ content: '@everyone', embeds: [new EmbedBuilder().setDescription(text).setColor('#ffcc00')] });
-            return interaction.editReply('✅ تم الإرسال.');
-        }
-        
-        if (act === 'list_players') {
-            const players = await Player.find({ guildId: guildId });
-            let list = players.map(v => `👤 **${v.name}** -> <@${v.userId}>`).join('\n');
-            return interaction.editReply(list || "لا توجد بيانات لهذا السيرفر");
+            await channel.send({ content: '@everyone', embeds: [new EmbedBuilder().setTitle('📢 إعلان الإدارة').setDescription(text).setColor('#ffcc00')] });
+            return interaction.reply({ content: '✅ تم إرسال الإعلان.', flags: [MessageFlags.Ephemeral] });
         }
 
-        if (act === 'start_vote') {
-            const players = await Player.find({ guildId: guildId });
-            const menu = new StringSelectMenuBuilder().setCustomId('vote').setPlaceholder('اختر المشتبه به')
-                .addOptions(players.map(p => ({ label: p.name, value: p.name })));
-            const channel = await client.channels.fetch(config.channelId);
-            await channel.send({ content: '🚨 **بدأ التصويت المجهول!**', components: [new ActionRowBuilder().addComponents(menu)] });
-            return interaction.editReply('✅ بدأ التصويت.');
+        if (act === 'start_triple_vote') {
+            const players = await Player.find({ guildId });
+            if (players.length < 2) return interaction.reply('❌ اللاعبين قليلين!');
+            await Vote.deleteMany({ guildId });
+            for (const p of players) {
+                const target = await client.users.fetch(p.userId).catch(() => null);
+                if (target) {
+                    const row = (id, label) => new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(id).setPlaceholder(label).addOptions(players.map(pl => ({ label: pl.name, value: pl.name }))));
+                    await target.send({ content: `🚨 **تصويت سيرفر ${interaction.guild.name}**`, components: [row('q1', 'الأكثر غثاثة؟'), row('q2', 'الأثقل دماً؟'), row('q3', 'من تريد طرده؟')] }).catch(() => {});
+                }
+            }
+            return interaction.reply('✅ أرسلت الأسئلة في الخاص!');
+        }
+
+        if (act === 'show_results') {
+            const res = await Vote.find({ guildId });
+            if (res.length === 0) return interaction.reply('❌ لا توجد أصوات.');
+            let summary = res.map((v, i) => `🗳️ **تصويت ${i+1}:**\nغثيث: ${v.q1} | ثقيل دم: ${v.q2} | طرد: ${v.q3}`).join('\n\n');
+            return interaction.reply({ content: summary, flags: [MessageFlags.Ephemeral] });
+        }
+
+        if (act === 'list_players') {
+            const players = await Player.find({ guildId });
+            let list = players.map(v => `👤 **${v.name}** -> <@${v.userId}>`).join('\n');
+            return interaction.reply({ content: list || "فارغة", flags: [MessageFlags.Ephemeral] });
+        }
+
+        if (act === 'reset_all') {
+            await Player.deleteMany({ guildId });
+            await Vote.deleteMany({ guildId });
+            return interaction.reply('🗑️ تم تصفير بيانات السيرفر.');
         }
     }
 
-    if (interaction.isStringSelectMenu() && interaction.customId === 'vote') {
-        await interaction.reply({ content: `✅ تم التصويت ضد: ${interaction.values[0]}`, flags: [MessageFlags.Ephemeral] });
+    if (interaction.isStringSelectMenu()) {
+        let v = await Vote.findOne({ voterId: user.id });
+        if (!v) v = new Vote({ voterId: user.id, guildId: interaction.guildId || "dm", q1: '-', q2: '-', q3: '-' });
+        if (interaction.customId === 'q1') v.q1 = interaction.values[0];
+        if (interaction.customId === 'q2') v.q2 = interaction.values[0];
+        if (interaction.customId === 'q3') v.q3 = interaction.values[0];
+        await v.save();
+        return interaction.reply({ content: `✅ سجلت اختيارك: ${interaction.values[0]}`, flags: [MessageFlags.Ephemeral] });
     }
 });
 
