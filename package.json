@@ -1,12 +1,15 @@
 {
-  "name": "spy-bot",
+  "name": "sora-bot",
   "version": "1.0.0",
-  "description": "Discord Spy Game Bot",
+  "description": "Sora Bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "discord.js": "^14.14.1"
+  },
+  "engines": {
+    "node": ">=16.0.0"
   }
 }
