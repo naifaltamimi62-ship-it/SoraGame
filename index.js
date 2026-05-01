@@ -6,15 +6,15 @@ const {
 const http = require('http');
 const mongoose = require('mongoose');
 
-// --- 1. نظام إبقاء البوت حياً ---
+// --- إبقاء البوت حياً ---
 const port = process.env.PORT || 10000; 
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.write("Sora Bot - Fixes Active");
+    res.write("Sora Bot - Performance Fix");
     res.end();
 }).listen(port, '0.0.0.0');
 
-// --- 2. الربط بالقاعدة ---
+// --- الربط بالقاعدة ---
 let token, mongoUri;
 try {
     const config = require('./config.json');
@@ -79,78 +79,81 @@ client.once('clientReady', async () => {
 
 client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand() && !interaction.isStringSelectMenu()) return;
-    if (interaction.replied || interaction.deferred) return;
 
     const { commandName, options, guildId, user } = interaction;
 
-    // --- تسجيل الدخول ---
     if (commandName === 'login') {
         await Player.findOneAndUpdate({ userId: user.id, guildId }, { name: options.getString('name'), desc: options.getString('desc') }, { upsert: true });
         return interaction.reply({ content: `✅ سجلت هويتك بنجاح!`, flags: [MessageFlags.Ephemeral] });
     }
 
-    // --- أدوات الإدارة ---
     if (commandName === 'admin_tools') {
+        // أهم إضافة: تأجيل الرد لمنع خطأ "did not respond"
+        await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+
         const act = options.getString('action');
         
-        // 1. كشف الهويات (إصلاح شامل)
-        if (act === 'list_players') {
-            const players = await Player.find({ guildId });
-            if (players.length === 0) return interaction.reply({ content: '❌ لا يوجد لاعبين مسجلين.', flags: [MessageFlags.Ephemeral] });
-            
-            let list = players.map(p => `🎭 **${p.name}** هو المستخدِم: <@${p.userId}>`).join('\n');
-            return interaction.reply({ content: `🔍 **قائمة هويات اللاعبين:**\n${list}`, flags: [MessageFlags.Ephemeral] });
-        }
-
-        // 2. بدء التصويت (تعديل الحد الأدنى إلى 3 لاعبين)
         if (act === 'start_triple_vote') {
             const players = await Player.find({ guildId });
-            if (players.length < 3) return interaction.reply({ content: '❌ يجب أن يكون هناك 3 لاعبين على الأقل لبدء التصويت!', flags: [MessageFlags.Ephemeral] });
+            if (players.length < 3) return interaction.editReply('❌ يجب أن يكون هناك 3 لاعبين على الأقل لبدء التصويت!');
             
             await Vote.deleteMany({ guildId });
+            let sentCount = 0;
+
             for (const p of players) {
                 const target = await client.users.fetch(p.userId).catch(() => null);
                 if (target) {
                     const row = (id, label) => new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(id).setPlaceholder(label).addOptions(players.map(pl => ({ label: pl.name, value: pl.name }))));
-                    await target.send({ content: `🚨 **بدأ التصويت في سيرفر ${interaction.guild.name}**\nأجب على الأسئلة الثلاثة:`, components: [row('q1', 'الأكثر غثاثة؟'), row('q2', 'الأثقل دماً؟'), row('q3', 'من تريد طرده؟')] }).catch(() => {});
+                    
+                    try {
+                        await target.send({ content: `🚨 **تصويت سيرفر ${interaction.guild.name}**`, components: [row('q1', 'الأكثر غثاثة؟'), row('q2', 'الأثقل دماً؟'), row('q3', 'من تريد طرده؟')] });
+                        sentCount++;
+                    } catch (e) { console.log(`Could not send DM to ${p.userId}`); }
                 }
             }
-            return interaction.reply({ content: '✅ أرسلت الأسئلة للجميع في الخاص!', flags: [MessageFlags.Ephemeral] });
+            return interaction.editReply(`✅ تم إرسال التصويت لـ ${sentCount} لاعبين في الخاص!`);
         }
 
-        // بقية الأدوات (الإعلان، الضبط، الحذف)
-        if (act === 'set_channel') {
-            await GuildConfig.findOneAndUpdate({ guildId }, { channelId: interaction.channelId }, { upsert: true });
-            return interaction.reply({ content: '✅ تم ضبط القناة.', flags: [MessageFlags.Ephemeral] });
+        if (act === 'list_players') {
+            const players = await Player.find({ guildId });
+            if (players.length === 0) return interaction.editReply('❌ لا يوجد لاعبين.');
+            let list = players.map(p => `🎭 **${p.name}** -> <@${p.userId}>`).join('\n');
+            return interaction.editReply(`🔍 **قائمة الهويات:**\n${list}`);
+        }
+
+        if (act === 'show_results') {
+            const res = await Vote.find({ guildId });
+            if (res.length === 0) return interaction.editReply('❌ لا توجد أصوات بعد.');
+            let summary = res.map((v, i) => `🗳️ **تصويت ${i+1}:**\nغثيث: ${v.q1} | ثقيل دم: ${v.q2} | طرد: ${v.q3}`).join('\n\n');
+            return interaction.editReply(`📊 **النتائج الحالية:**\n\n${summary}`);
         }
 
         if (act === 'announcement') {
             const text = options.getString('text');
             const config = await GuildConfig.findOne({ guildId });
-            if (!config) return interaction.reply({ content: '❌ اضبط القناة أولاً!', flags: [MessageFlags.Ephemeral] });
+            if (!config) return interaction.editReply('❌ اضبط القناة أولاً!');
             const channel = await client.channels.fetch(config.channelId);
             await channel.send({ content: '@everyone', embeds: [new EmbedBuilder().setTitle('📢 إعلان الإدارة').setDescription(text).setColor('#ffcc00')] });
-            return interaction.reply({ content: '✅ تم الإرسال.', flags: [MessageFlags.Ephemeral] });
+            return interaction.editReply('✅ تم إرسال الإعلان.');
         }
 
-        if (act === 'show_results') {
-            const res = await Vote.find({ guildId });
-            let summary = res.map((v, i) => `🗳️ **تصويت ${i+1}:**\nغثيث: ${v.q1} | ثقيل دم: ${v.q2} | طرد: ${v.q3}`).join('\n\n');
-            return interaction.reply({ content: summary || "لا توجد نتائج", flags: [MessageFlags.Ephemeral] });
+        if (act === 'set_channel') {
+            await GuildConfig.findOneAndUpdate({ guildId }, { channelId: interaction.channelId }, { upsert: true });
+            return interaction.editReply('✅ تم ضبط القناة.');
         }
 
         if (act === 'reset_all') {
             await Player.deleteMany({ guildId });
             await Vote.deleteMany({ guildId });
-            return interaction.reply({ content: '🗑️ تم تصفير جميع البيانات لهذا السيرفر.', flags: [MessageFlags.Ephemeral] });
+            return interaction.editReply('🗑️ تم تصفير جميع البيانات.');
         }
     }
 
-    // --- أوامر مجهولة (Say & Who) ---
     if (commandName === 'say') {
         const p = await Player.findOne({ userId: user.id, guildId });
         if (!p) return interaction.reply({ content: '❌ سجل بـ /login أولاً!', flags: [MessageFlags.Ephemeral] });
         const config = await GuildConfig.findOne({ guildId });
+        if (!config) return interaction.reply({ content: '❌ اضبط القناة بـ admin_tools أولاً!', flags: [MessageFlags.Ephemeral] });
         const channel = await client.channels.fetch(config.channelId);
         await channel.send({ embeds: [new EmbedBuilder().setAuthor({ name: p.name }).setDescription(options.getString('message')).setColor('#2b2d31')] });
         return interaction.reply({ content: '✅ تم الإرسال!', flags: [MessageFlags.Ephemeral] });
@@ -162,7 +165,6 @@ client.on('interactionCreate', async interaction => {
         return interaction.reply({ embeds: [new EmbedBuilder().setTitle('الشخصيات الحالية').setDescription(list || 'لا يوجد لاعبين')], flags: [MessageFlags.Ephemeral] });
     }
 
-    // --- معالجة القوائم المنسدلة ---
     if (interaction.isStringSelectMenu()) {
         await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
         let v = await Vote.findOne({ voterId: user.id });
